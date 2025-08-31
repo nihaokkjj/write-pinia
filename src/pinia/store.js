@@ -1,6 +1,11 @@
 import { getCurrentInstance , inject, reactive, computed, toRefs} from "vue"
 import { PiniaSymbol } from "./rootStore"
 
+//判断是否是对象
+function isObject(value) {
+    return typeof value === 'object' && value !== null
+}
+
 function createOptionStore(id, options, pinia) {
     const {state, actions, getters={}} = options //store里面的数据, 已定义
 
@@ -29,8 +34,37 @@ function createOptionStore(id, options, pinia) {
 
 //setupStore 用户已经提供了完整的setup方法了, 我们只需执行setup函数即可,
 //通过这个返回值, 将其放在store上即可
-function createSetupStore(id, setup, pinia) {
-    const store = reactive({})
+function createSetupStore(id, setup, pinia, isSetupStore) {
+    function merge(target, partialState) {
+        for (const key in partialState) {
+            
+            if(!partialState.hasOwnProperty(key)) continue
+            //原始的值
+            const targetValue = target[key]
+            //后来的值
+            const subPatch = partialState[key]
+            
+            if (isObject(targetValue) && isObject(subPatch) && !isRef(subPatch)) { //ref也是对象
+                target[key] = merge(targetValue, subPatch)
+            }
+            //如果不需要合并直接用新的覆盖掉老的即可
+            target[key] = subPatch
+        }
+    }
+
+    //这里需要获取原来的所有状态
+    function $patch(partialStateOrMutator) {
+        //partialStateOrMutator部分状态
+if(typeof partialStateOrMutator !== 'function')
+        //当前store中的全部状态, pinia.state.value[i]
+        merge(pinia.state.value[id], partialStateOrMutator)
+    }
+
+    const partialStore = {
+        $patch
+   }
+
+    const store = reactive(partialStore)
 
         //处理this指向
     function wrapAction (action) {
@@ -40,6 +74,10 @@ function createSetupStore(id, setup, pinia) {
         }
     }
 
+    if(isSetupStore) {
+        pinia.state.value[id] = {}
+        //用于存放setupStore中的状态
+    }
     const setupStore = setup()
     //拿到的setupStore可能没有处理this指向
 
@@ -48,8 +86,12 @@ function createSetupStore(id, setup, pinia) {
         const value = setupStore[prop]
         if (typeof value === 'function') {
             setupStore[prop] = wrapAction(value)
+        } else if (isSetupStore) { //对setupStore来做一些操作
+            //是用户写的composition API
+            pinia.state.value[id][prop] = {}
         }
     }
+
     Object.assign(store, setupStore)//加入到队伍里面
     // console.log(store)
     pinia._s.set(id, store)
