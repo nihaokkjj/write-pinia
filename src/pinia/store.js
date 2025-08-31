@@ -1,7 +1,10 @@
-import { getCurrentInstance , inject, reactive, computed, toRefs} from "vue"
+import { getCurrentInstance ,isRef, inject, reactive, computed, toRefs, watch} from "vue"
 import { PiniaSymbol } from "./rootStore"
-import {isRef, watch} from 'vue'
 import {addSubscription, triggerSubscriptions} from './sub' //发布和订阅
+function isComputed(value) {
+    return isRef(value) && value.effect
+}
+
 //判断是否是对象
 function isObject(value) {
     return typeof value === 'object' && value !== null
@@ -76,11 +79,10 @@ function createSetupStore(id, setup, pinia, isSetupStore) {
         $patch,
         //订阅状态
         $subscribe(callback) {
-            watch(pinia.state.value[id], state => {
+            watch(pinia.state.value[id] , state => {
                 callback({id}, state)
             })
         },
-
         //订阅用户的action操作
         $onAction: addSubscription.bind(null, actionSubscriptions), //订阅
    }
@@ -135,12 +137,26 @@ function createSetupStore(id, setup, pinia, isSetupStore) {
             setupStore[prop] = wrapAction(value)
         } else if (isSetupStore) { //对setupStore来做一些操作
             //是用户写的composition API
-            pinia.state.value[id][prop] = {}
+            if(!isComputed(value)) {
+                pinia.state.value[id][prop] = value
+            }
         }
     }
 
     Object.assign(store, setupStore)//加入到队伍里面
     // console.log(store)
+    Object.defineProperty(store, '$state', {
+        get() {
+            return pinia.state.value[id]
+        },
+        set(newState) {
+            store.$patch(newState)
+        }
+    })
+
+    pinia._p.forEach(plugin => {
+        plugin({store})
+    })
     pinia._s.set(id, store)
     return store 
 }

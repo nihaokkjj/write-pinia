@@ -1,9 +1,9 @@
 <script setup>
 import {useCounterStore} from './stores/counter.js'
-
+import { storeToRefs }  from './pinia/index.js'
 // import {PiniaSymbol} from './pinia/rootStore.js'
 const store = useCounterStore()
-
+console.log(storeToRefs(store))
 const patch = () => {
   // store.$patch({count: 2})
   store.$patch((state) => {
