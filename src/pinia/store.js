@@ -1,6 +1,7 @@
 import { getCurrentInstance , inject, reactive, computed, toRefs} from "vue"
 import { PiniaSymbol } from "./rootStore"
-
+import {isRef, watch} from 'vue'
+import {addSubscription, triggerSubscriptions} from './sub' //发布和订阅
 //判断是否是对象
 function isObject(value) {
     return typeof value === 'object' && value !== null
@@ -9,7 +10,7 @@ function isObject(value) {
 function createOptionStore(id, options, pinia) {
     const {state, actions, getters={}} = options //store里面的数据, 已定义
 
-    const store = reactive({})//pinia就是创建了一个响应式对象而已
+    //pinia就是创建了一个响应式对象而已
     //需要将这个api转换成组合式
     function setup() {
         pinia.state.value[id] = state ? state() : {}
@@ -21,6 +22,7 @@ function createOptionStore(id, options, pinia) {
             actions,
             Object.keys(getters).reduce((computeds, getterKey)=>{
                 computeds[getterKey] = computed(()=>{
+                    const store = pinia._s.get(id) //当前的store
                     return getters[getterKey].call(store)
                 })
                 return computeds
@@ -28,7 +30,12 @@ function createOptionStore(id, options, pinia) {
         )
     }
     //减少代码的重复书写, 此时选项式store已经将数据处理, 剩下的逻辑和处理组合式一致
-    createSetupStore(id, setup, pinia)
+    const store = createSetupStore(id, setup, pinia)
+    //重置方法
+    store.$reset = function() { //这个方法只支持optionAPI, 因为setupAPI中, 用户自己控制状态
+        const newState = state ? state() : {}
+        this.$patch(newState)
+    }
     return store 
 }
 
@@ -46,31 +53,71 @@ function createSetupStore(id, setup, pinia, isSetupStore) {
             
             if (isObject(targetValue) && isObject(subPatch) && !isRef(subPatch)) { //ref也是对象
                 target[key] = merge(targetValue, subPatch)
+            } else {
+                //如果不需要合并直接用新的覆盖掉老的即可
+                target[key] = subPatch
             }
-            //如果不需要合并直接用新的覆盖掉老的即可
-            target[key] = subPatch
         }
     }
 
     //这里需要获取原来的所有状态
     function $patch(partialStateOrMutator) {
         //partialStateOrMutator部分状态
-if(typeof partialStateOrMutator !== 'function')
-        //当前store中的全部状态, pinia.state.value[i]
-        merge(pinia.state.value[id], partialStateOrMutator)
+        if(typeof partialStateOrMutator !== 'function') {
+            //当前store中的全部状态, pinia.state.value[i]
+            merge(pinia.state.value[id], partialStateOrMutator)
+        } else {
+            partialStateOrMutator(pinia.state.value[id])
+        }
     }
 
+    const actionSubscriptions = [] //所有订阅的actions时间, 都应该放在这个数组中
     const partialStore = {
-        $patch
-   }
+        $patch,
+        //订阅状态
+        $subscribe(callback) {
+            watch(pinia.state.value[id], state => {
+                callback({id}, state)
+            })
+        },
 
+        //订阅用户的action操作
+        $onAction: addSubscription.bind(null, actionSubscriptions), //订阅
+   }
+    //pinia就是创建了一个响应式对象而已
     const store = reactive(partialStore)
 
         //处理this指向
     function wrapAction (action) {
         return function () {
+            const afterCallbacks = []
+            const onErrorCallbacks = []
+            const after = (callback) => {
+                afterCallbacks.push(callback)
+            }
+            const onError = (callback) => {
+                onErrorCallbacks.push(callback)
+            }
+            triggerSubscriptions(actionSubscriptions, {after, onError}) //让用户传递after和error
             //将action中的this永远处理成store, 保证this指向正确
-            return action.call(store, ...arguments)
+
+            //回调的方式
+            let result
+            try {//正常action是一个回调的情况, 可以直接拿到返回值出发after回调
+            result =  action.call(store, ...arguments)
+            triggerSubscriptions(afterCallbacks, result)
+            } catch (e){
+                triggerSubscriptions(onErrorCallbacks, e)
+            }
+            //如果返回值是一个Promise, 针对场景做处理   
+            if(result instanceof Promise) { 
+                return result.then(value => {
+                    triggerSubscriptions(afterCallbacks, value)
+                }).catch(error => {
+                    triggerSubscriptions(onErrorCallbacks, error)
+                })
+            }  
+            return result
         }
     }
 

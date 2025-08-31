@@ -1,6 +1,6 @@
 import { createApp } from 'vue'
 import App from './App.vue'
-import {createPinia} from './pinia/creatStore'
+import {createPinia} from './pinia/createStore'
 
 const app = createApp(App)
 const pinia = createPinia()
